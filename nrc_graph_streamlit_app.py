@@ -1,29 +1,16 @@
-# NRC Licensing Process — Streamlit Graph Viewer (optimized)
-# ---------------------------------------------------------
-# Improvements:
-#   - Cached search index and DataFrames
-#   - Sidebar toggles for interactive graph / physics
-#   - Neighborhood (N-hop) graph subset with max-node cap
-#   - Lighter PyVis defaults (physics off, config panel off)
-#
-# Usage:
-#   pip install -r requirements_streamlit.txt
-#   # or:
-#   pip install streamlit streamlit-agraph pyvis networkx pandas
-#   streamlit run nrc_graph_streamlit_app.py
+# NRC Licensing Process — Streamlit Graph Viewer (click sync fixed + readable graph)
 
 import json
 import os
 import re
-from collections import deque
 from typing import Dict, Any, List, Tuple, Optional
 
 import streamlit as st
 
 # Optional libs for graph rendering (PyVis fallback)
 try:
-    import networkx as nx  # noqa: F401
-    from pyvis.network import Network  # noqa: F401
+    import networkx as nx
+    from pyvis.network import Network
     HAS_GRAPH = True
 except Exception:
     HAS_GRAPH = False
@@ -44,6 +31,59 @@ except Exception:
 
 st.set_page_config(page_title="Design and Engineering for Licensing Process — Graph Viewer", layout="wide")
 DEFAULT_JSON_PATH = "data/nrc_licensing_process_data.json"
+
+
+# -------------------------
+# Utilities
+# -------------------------
+def wrap_text(s: str, width: int = 28, max_lines: int = 3) -> str:
+    """Insert newlines to keep node labels tidy."""
+    if not s:
+        return ""
+    parts, line = [], []
+    count = 0
+    for word in s.split():
+        if count + len(word) + (1 if line else 0) <= width:
+            line.append(word)
+            count += len(word) + (1 if line[:-1] else 0)
+        else:
+            parts.append(" ".join(line))
+            line = [word]; count = len(word)
+            if max_lines and len(parts) >= max_lines - 1:
+                break
+    if line and (not max_lines or len(parts) < max_lines):
+        parts.append(" ".join(line))
+    # truncate if exceeded
+    if len(parts) > max_lines:
+        parts = parts[:max_lines]
+    out = "\n".join(parts)
+    if s != " ".join((" ".join(p.split()) for p in parts)):
+        out += " …"
+    return out
+
+
+def compute_levels(tasks: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Rough depth (longest distance from any root) for hierarchical layout."""
+    # Build graph
+    g = nx.DiGraph()
+    for t in tasks:
+        tid = str(t.get("id"))
+        g.add_node(tid)
+    for t in tasks:
+        tid = str(t.get("id"))
+        for d in (t.get("deps") or []):
+            g.add_edge(str(d), tid)
+    # If cycles, fall back gracefully
+    try:
+        order = list(nx.topological_sort(g))
+    except Exception:
+        return {}
+
+    depth = {n: 0 for n in g.nodes}
+    for n in order:
+        for _, v in g.out_edges(n):
+            depth[v] = max(depth[v], depth[n] + 1)
+    return depth
 
 
 # -------------------------
@@ -87,19 +127,7 @@ def text_blob(task: Dict[str, Any]) -> str:
             fields.append(str(tool.get("purpose","")))
     return " ".join(fields).lower()
 
-# --------- CACHING: search index ---------
-@st.cache_data(show_spinner=False)
-def build_search_index(tasks: List[Dict[str, Any]]) -> Dict[str, str]:
-    """One-time build of lowercase text blobs for fast filtering."""
-    return {str(t.get("id", "")): text_blob(t) for t in tasks}
-
-def filter_tasks(
-    data: Dict[str, Any],
-    query: str,
-    phases_sel: List[str],
-    chapters_sel: List[str],
-    index: Optional[Dict[str, str]] = None,
-) -> List[Dict[str, Any]]:
+def filter_tasks(data: Dict[str, Any], query: str, phases_sel: List[str], chapters_sel: List[str]) -> List[Dict[str, Any]]:
     tasks = data.get("tasks", [])
     q = (query or "").strip().lower()
     res = []
@@ -108,12 +136,8 @@ def filter_tasks(
             continue
         if chapters_sel and (t.get("srpChapter") or "") not in chapters_sel:
             continue
-        if q:
-            blob = (index or {}).get(str(t.get("id")))
-            if blob is None:
-                blob = text_blob(t)  # fallback if index missing
-            if q not in blob:
-                continue
+        if q and q not in text_blob(t):
+            continue
         res.append(t)
     return res
 
@@ -141,55 +165,23 @@ def color_for_phase(phase: str) -> str:
 
 
 # -------------------------
-# Graph helpers: subset
+# Graph rendering (PyVis) — readable defaults
 # -------------------------
-def subset_tasks_by_hops(tasks: List[Dict[str, Any]], center_id: Optional[str], hops: int) -> List[Dict[str, Any]]:
-    """Return tasks within N hops (both directions) from center_id, preserving original order."""
-    if not center_id or hops <= 0:
-        return tasks
-
-    by_id = {str(t.get("id")): t for t in tasks}
-    if center_id not in by_id:
-        return tasks
-
-    # Build adjacency (parents via deps; children via reverse deps)
-    parents = {tid: set(map(str, (by_id[tid].get("deps") or []))) for tid in by_id}
-    children = {tid: set() for tid in by_id}
-    for t in tasks:
-        tid = str(t.get("id"))
-        for d in (t.get("deps") or []):
-            d = str(d)
-            if d in children:
-                children[d].add(tid)
-
-    seen = {center_id}
-    dq = deque([(center_id, 0)])
-    while dq:
-        nid, dist = dq.popleft()
-        if dist == hops:
-            continue
-        for nbr in parents.get(nid, set()) | children.get(nid, set()):
-            if nbr in by_id and nbr not in seen:
-                seen.add(nbr)
-                dq.append((nbr, dist + 1))
-
-    return [t for t in tasks if str(t.get("id")) in seen]
-
-
-# -------------------------
-# Graph rendering (PyVis)
-# -------------------------
-def build_graph_html(tasks: List[Dict[str, Any]], physics: bool = False) -> str:
+def build_graph_html(tasks: List[Dict[str, Any]], hierarchical: bool = True, physics: bool = False) -> str:
     if not HAS_GRAPH:
         return "<div style='padding:16px;font-family:system-ui'>Install dependencies to render graph: <code>pip install networkx pyvis</code></div>"
+
     import networkx as nx
     from pyvis.network import Network
+
+    levels = compute_levels(tasks) if hierarchical else {}
 
     G = nx.DiGraph()
     for t in tasks:
         nid = str(t.get("id"))
-        label = f"{t.get('id','')}  {t.get('name','')}".strip()
-        title = f"<b>{t.get('id','')}</b> — {t.get('name','')}"
+        name = t.get("name","")
+        label = f"{t.get('id','')}\n{wrap_text(name)}".strip()
+        title = f"<b>{t.get('id','')}</b> — {name}"
         chapter = t.get("srpChapter") or ""
         phase = t.get("phase") or ""
         meta = []
@@ -198,6 +190,7 @@ def build_graph_html(tasks: List[Dict[str, Any]], physics: bool = False) -> str:
         if chapter:
             meta.append("<span style='border:1px solid #c7d2fe;border-radius:999px;padding:2px 6px;background:#eef2ff;color:#3730a3;'>{}</span>".format(chapter))
         desc = (t.get("description") or "").replace("<", "&lt;").replace(">", "&gt;")
+
         tool_names = []
         for s in (t.get("subtasks") or []):
             for tool in (s.get("tools") or [])[:1]:
@@ -205,31 +198,69 @@ def build_graph_html(tasks: List[Dict[str, Any]], physics: bool = False) -> str:
         preview = ""
         if tool_names:
             preview = "<div style='margin-top:6px;font-size:11px;color:#475569;'>Tools: " + ", ".join(tool_names[:5]) + "</div>"
+
         title_html = "{}<br/>{}<br/><div style='margin-top:6px;color:#374151;font-size:12px'>{}</div>{}".format(
             title, " ".join(meta), desc, preview
         )
-        G.add_node(nid, label=label, title=title_html, color=color_for_phase(phase), shape="box")
+
+        attrs = dict(label=label, title=title_html, color=color_for_phase(phase), shape="box")
+        if hierarchical and levels:
+            attrs["level"] = int(levels.get(nid, 0))
+        G.add_node(nid, **attrs)
 
     for t in tasks:
         for d in t.get("deps") or []:
             if str(d) in G.nodes and str(t.get("id")) in G.nodes:
                 G.add_edge(str(d), str(t.get("id")))
 
-    net = Network(height="700px", width="100%", directed=True, bgcolor="#ffffff", font_color="#222")
-    net.set_options(f"""
-    {{
-      "layout": {{"improvedLayout": true}},
-      "physics": {{
-        "enabled": {str(physics).lower()},
-        "solver": "barnesHut",
-        "stabilization": {{"enabled": true, "fit": true}},
-        "barnesHut": {{"gravitationalConstant": -30000, "centralGravity": 0.2, "springLength": 160, "springConstant": 0.05, "damping": 0.8}}
-      }},
-      "interaction": {{"hover": true, "tooltipDelay": 100, "navigationButtons": true, "keyboard": {{"enabled": true}}}},
-      "edges": {{"arrows": {{"to": {{"enabled": true}}}}}},
-      "configure": {{"enabled": false}}
-    }}
-    """)
+    net = Network(
+        height="700px",
+        width="100%",
+        directed=True,
+        bgcolor="#ffffff",
+        font_color="#222",
+        cdn_resources="in_line",  # avoid CDN stalls
+    )
+
+    if hierarchical:
+        options = """
+        {
+          "layout": {
+            "hierarchical": {
+              "enabled": true,
+              "direction": "LR",
+              "sortMethod": "directed",
+              "nodeSpacing": 170,
+              "treeSpacing": 220,
+              "levelSeparation": 160
+            }
+          },
+          "physics": { "enabled": %s },
+          "interaction": { "hover": true, "tooltipDelay": 100, "navigationButtons": false, "keyboard": { "enabled": true } },
+          "edges": { "arrows": { "to": { "enabled": true } } },
+          "nodes": { "shape": "box", "font": { "size": 14 } },
+          "configure": { "enabled": false }
+        }
+        """ % (str(physics).lower())
+    else:
+        options = """
+        {
+          "layout": { "improvedLayout": true },
+          "physics": {
+            "enabled": %s,
+            "solver": "barnesHut",
+            "stabilization": { "enabled": true, "fit": true },
+            "barnesHut": { "gravitationalConstant": -30000, "centralGravity": 0.2,
+                           "springLength": 160, "springConstant": 0.05, "damping": 0.8 }
+          },
+          "interaction": { "hover": true, "tooltipDelay": 100, "navigationButtons": true, "keyboard": { "enabled": true } },
+          "edges": { "arrows": { "to": { "enabled": true } } },
+          "nodes": { "shape": "box", "font": { "size": 14 } },
+          "configure": { "enabled": false }
+        }
+        """ % (str(physics).lower())
+
+    net.set_options(options)
     net.from_nx(G)
     return net.generate_html()
 
@@ -239,50 +270,57 @@ def build_graph_html(tasks: List[Dict[str, Any]], physics: bool = False) -> str:
 # -------------------------
 def render_graph_interactive(
     tasks: List[Dict[str, Any]],
-    physics: bool = False,
-    use_agraph: bool = True
+    use_agraph: bool = True,
+    hierarchical: bool = True,
+    physics: bool = False
 ) -> Optional[str]:
-    """
-    If streamlit-agraph is available, render an interactive graph and return the clicked node id.
-    Otherwise, fall back to PyVis HTML (no click feedback) and return None.
-    """
+    """Return clicked node id if using agraph; PyVis fallback returns None."""
     if not tasks:
         return None
 
     if HAS_AGRAPH and use_agraph:
         nodes: List[Node] = []
         edges: List[Edge] = []
+
+        levels = compute_levels(tasks) if hierarchical else {}
+
         for t in tasks:
             nid = str(t.get("id"))
-            label = f"{t.get('id','')} — {t.get('name','')}"
+            name = t.get("name","")
+            label = f"{t.get('id','')} — {wrap_text(name)}"
             phase = t.get("phase") or ""
             desc = t.get("description") or ""
-            nodes.append(
-                Node(
-                    id=nid,
-                    label=label,
-                    title=f"<b>{nid}</b><br/>{desc}",
-                    size=18,
-                    shape="box",
-                    color=color_for_phase(phase),
-                )
+            node_kwargs = dict(
+                id=nid,
+                label=label,
+                title=f"<b>{nid}</b><br/>{desc}",
+                size=18,
+                shape="box",
+                color=color_for_phase(phase),
             )
+            # agraph Node accepts 'level' and 'font' in recent versions; ignore if unsupported
+            if hierarchical and levels:
+                node_kwargs["level"] = int(levels.get(nid, 0))
+            nodes.append(Node(**node_kwargs))
+
         for t in tasks:
             for d in t.get("deps") or []:
                 edges.append(Edge(source=str(d), target=str(t.get("id"))))
 
-        config = Config(
-            width=900, height=700, directed=True, physics=physics,
-            hierarchical=False,  # Set True if you want layered layout
-            nodeHighlightBehavior=True
+        cfg = Config(
+            width=900, height=700, directed=True,
+            physics=physics,
+            hierarchical=hierarchical,
+            nodeHighlightBehavior=True,
         )
-        ret = agraph(nodes=nodes, edges=edges, config=config)
+
+        ret = agraph(nodes=nodes, edges=edges, config=cfg)
+        # Normalize return value across versions
         if isinstance(ret, dict):
-            # 'selected_node', 'selected_nodes', 'clicked_node'
             cand = ret.get("selected_node") or ret.get("clicked_node")
             if not cand:
-                nodes_list = ret.get("selected_nodes") or []
-                cand = nodes_list[0] if nodes_list else None
+                arr = ret.get("selected_nodes") or []
+                cand = arr[0] if arr else None
             return str(cand) if cand else None
         if isinstance(ret, (list, tuple)) and ret:
             return str(ret[0])
@@ -290,10 +328,9 @@ def render_graph_interactive(
             return ret
         return None
 
-    # PyVis fallback (no click feedback)
-    html = build_graph_html(tasks, physics=physics)
+    # Fallback (no click feedback)
+    html = build_graph_html(tasks, hierarchical=hierarchical, physics=physics)
     st.components.v1.html(html, height=740, scrolling=True)
-    st.info("Tip: For click-to-select, install `streamlit-agraph` (pip) to enable interactive linking.")
     return None
 
 
@@ -366,29 +403,11 @@ def details_block(task: Dict[str, Any]):
     else:
         st.write("—")
 
-    st.download_button(
-        "Download this task as JSON",
-        data=json.dumps(task, indent=2),
-        file_name=f"task_{task.get('id','')}.json",
-        mime="application/json"
-    )
-
 
 # -------------------------
 # Data Browser helpers
 # -------------------------
-@st.cache_data(show_spinner=False)
 def build_dataframes(data: Dict[str, Any]):
-    """
-    Build aggregated + exploded DataFrames:
-      - df_tasks: one row per task (aggregated fields)
-      - df_reqs: one row per requirement
-      - df_tools: one row per (subtask tool)
-      - df_subtasks: one row per subtask
-    """
-    if not HAS_PANDAS:
-        return None, None, None, None
-
     tasks = data.get("tasks", [])
     rows_tasks, rows_reqs, rows_tools, rows_subtasks = [], [], [], []
     for t in tasks:
@@ -400,7 +419,6 @@ def build_dataframes(data: Dict[str, Any]):
         reqs = t.get("requirements") or []
         subs = t.get("subtasks") or []
 
-        # Exploded requirements
         for r in reqs:
             rows_reqs.append({
                 "task_id": tid,
@@ -413,7 +431,6 @@ def build_dataframes(data: Dict[str, Any]):
             })
 
         tool_names, tool_types = [], set()
-        # Exploded subtasks & tools
         for s in subs:
             sid = s.get("id","")
             stitle = s.get("title","")
@@ -458,13 +475,13 @@ def build_dataframes(data: Dict[str, Any]):
             "tool_types": ", ".join(sorted(tool_types)),
         })
 
-    df_tasks = pd.DataFrame(rows_tasks)
-    df_reqs = pd.DataFrame(rows_reqs)
-    df_tools = pd.DataFrame(rows_tools)
-    df_subtasks = pd.DataFrame(rows_subtasks)
+    df_tasks = pd.DataFrame(rows_tasks) if HAS_PANDAS else None
+    df_reqs = pd.DataFrame(rows_reqs) if HAS_PANDAS else None
+    df_tools = pd.DataFrame(rows_tools) if HAS_PANDAS else None
+    df_subtasks = pd.DataFrame(rows_subtasks) if HAS_PANDAS else None
     return df_tasks, df_reqs, df_tools, df_subtasks
 
-def df_download_button(df, label: str, filename: str):
+def df_download_button(df: pd.DataFrame, label: str, filename: str):
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(label, data=csv, file_name=filename, mime="text/csv")
 
@@ -474,7 +491,7 @@ def df_download_button(df, label: str, filename: str):
 # -------------------------
 def main():
     st.title("NRC Licensing Process — JSON Graph Viewer")
-    st.caption("Loads a JSON database and renders a linked task graph with details and filters. Now with click-to-select (agraph) and a Data Browser tab.")
+    st.caption("Readable graph layout + reliable click-to-select (no locking).")
 
     # Sidebar: load
     with st.sidebar:
@@ -506,8 +523,6 @@ def main():
     if data is None:
         st.stop()
 
-    # Build once and reuse
-    search_index = build_search_index(data.get("tasks", []))
     phases, chapters = infer_filters(data)
 
     st.sidebar.divider()
@@ -516,25 +531,35 @@ def main():
     phase_sel = st.sidebar.multiselect("Phase", options=phases, default=[])
     chap_sel = st.sidebar.multiselect("SRP Chapter", options=chapters, default=[])
 
-    # Performance controls
+    # Graph controls
     st.sidebar.divider()
-    st.sidebar.header("Performance")
-    use_interactive_default = True and HAS_AGRAPH
-    use_interactive = st.sidebar.toggle("Use interactive graph (agraph if available)", value=use_interactive_default)
-    physics_on = st.sidebar.toggle("Enable graph physics", value=False)
-    hops = st.sidebar.slider("Neighborhood hops around selection", 0, 3, 1)
-    max_nodes = st.sidebar.slider("Max nodes to render", 50, 2000, 400, 50)
+    st.sidebar.header("Graph")
+    use_agraph = st.sidebar.toggle("Use interactive engine (agraph)", value=HAS_AGRAPH and True)
+    hierarchical = st.sidebar.toggle("Use hierarchical layout (recommended)", value=True)
+    physics = st.sidebar.toggle("Enable physics", value=False)
 
     st.sidebar.divider()
     st.sidebar.header("Export")
-    filtered_tasks = filter_tasks(data, q, phase_sel, chap_sel, index=search_index)
+    filtered_tasks = filter_tasks(data, q, phase_sel, chap_sel)
     export_payload = {"meta": data.get("meta", {}), "tasks": filtered_tasks}
     st.sidebar.download_button("Download filtered JSON", data=json.dumps(export_payload, indent=2),
                                file_name="nrc_licensing_filtered.json", mime="application/json")
 
-    # Maintain current selection in session state
+    # ---------- Selection state & graph event gating ----------
     if "selected_id" not in st.session_state:
         st.session_state["selected_id"] = str(filtered_tasks[0]["id"]) if filtered_tasks else None
+    if "_sync_from_graph" not in st.session_state:
+        st.session_state["_sync_from_graph"] = False
+    if "last_graph_click_id" not in st.session_state:
+        st.session_state["last_graph_click_id"] = None
+    if "ignore_graph_clicks" not in st.session_state:
+        st.session_state["ignore_graph_clicks"] = False
+    # reset the graph click memory when graph controls change
+    graph_sig = f"{int(use_agraph)}-{int(hierarchical)}-{int(physics)}"
+    if st.session_state.get("_graph_sig") != graph_sig:
+        st.session_state["_graph_sig"] = graph_sig
+        st.session_state["last_graph_click_id"] = None
+        st.session_state["ignore_graph_clicks"] = False
 
     # Tabs
     tab_graph, tab_data = st.tabs(["📈 Graph & Details", "📊 Data Browser"])
@@ -542,41 +567,78 @@ def main():
     # ---- Graph & Details tab ----
     with tab_graph:
         col_graph, col_details = st.columns([7,5])
+
         with col_graph:
             st.subheader("Process Graph")
 
-            # Reduce to neighborhood & cap count
-            graph_tasks = filtered_tasks
-            if st.session_state.get("selected_id") and hops > 0:
-                graph_tasks = subset_tasks_by_hops(filtered_tasks, st.session_state["selected_id"], hops)
-            if len(graph_tasks) > max_nodes:
-                graph_tasks = graph_tasks[:max_nodes]
-
-            # Use interactive agraph if possible, else PyVis fallback
-            selected_from_graph = render_graph_interactive(
-                graph_tasks, physics=physics_on, use_agraph=use_interactive
+            # Render graph and capture click
+            clicked = render_graph_interactive(
+                filtered_tasks,
+                use_agraph=use_agraph,
+                hierarchical=hierarchical,
+                physics=physics
             )
-            if selected_from_graph:
-                st.session_state["selected_id"] = selected_from_graph
 
-            st.caption(f"Rendering {len(graph_tasks)} nodes "
-                       f"(hops={hops}, physics={'on' if physics_on else 'off'}, "
-                       f"interactive={'on' if use_interactive else 'off'}).")
-            st.markdown(":memo: **Tip:** Click a node (agraph) to load its details. Turn physics on only when needed for layout.")
+            # Treat graph clicks as edge-triggered events only
+            new_click = clicked and (clicked != st.session_state.get("last_graph_click_id"))
+
+            if st.session_state.get("ignore_graph_clicks", False):
+                # While the user is driving via dropdown, ignore repeats
+                if new_click:
+                    # user clicked a *different* node → hand control back to graph
+                    st.session_state["ignore_graph_clicks"] = False
+                    st.session_state["last_graph_click_id"] = clicked
+                    if clicked != st.session_state.get("selected_id"):
+                        st.session_state["selected_id"] = clicked
+                        st.session_state["_sync_from_graph"] = True
+            else:
+                # Graph is the driver only when a *new* click occurs
+                if new_click:
+                    st.session_state["last_graph_click_id"] = clicked
+                    if clicked != st.session_state.get("selected_id"):
+                        st.session_state["selected_id"] = clicked
+                        st.session_state["_sync_from_graph"] = True
+
+            st.caption(
+                f"Layout: {'Hierarchical' if hierarchical else 'Free'} • "
+                f"Physics: {'On' if physics else 'Off'} • "
+                f"Engine: {'agraph' if (use_agraph and HAS_AGRAPH) else 'pyvis'}"
+            )
+            if not (use_agraph and HAS_AGRAPH):
+                st.info("Tip: Install `streamlit-agraph` for click-to-select.")
 
         with col_details:
             st.subheader("Task Details")
             options = [f"{t.get('id')} — {t.get('name')}" for t in filtered_tasks]
             if options:
-                # Compute index from session_state selection (if still present after filtering)
-                sel_id = st.session_state.get("selected_id")
                 id_to_idx = {str(t.get("id")): i for i, t in enumerate(filtered_tasks)}
-                pre_idx = id_to_idx.get(str(sel_id), 0)
-                sel_label = st.selectbox("Select a task", options=options, index=pre_idx, key="task_select")
-                selected_id = sel_label.split(" — ", 1)[0].strip()
-                st.session_state["selected_id"] = selected_id  # keep in sync with dropdown
+                cur_id = st.session_state.get("selected_id")
+                cur_idx = id_to_idx.get(str(cur_id), 0)
+                current_option_label = options[cur_idx]
 
-                # Show details
+                # One-shot sync from graph → selectbox
+                if st.session_state.get("_sync_from_graph"):
+                    st.session_state["task_select"] = current_option_label
+                    st.session_state["_sync_from_graph"] = False
+                elif "task_select" not in st.session_state:
+                    st.session_state["task_select"] = current_option_label
+
+                # When dropdown changes, let dropdown drive and ignore stale graph selection
+                def _on_select_change():
+                    lbl = st.session_state["task_select"]
+                    sid = lbl.split(" — ", 1)[0].strip()
+                    st.session_state["selected_id"] = sid
+                    st.session_state["ignore_graph_clicks"] = True  # prevent immediate reversion
+
+                sel_label = st.selectbox(
+                    "Select a task",
+                    options=options,
+                    key="task_select",
+                    on_change=_on_select_change
+                )
+
+                # Show details based on the single source of truth
+                selected_id = st.session_state.get("selected_id")
                 task = next((t for t in filtered_tasks if str(t.get("id")) == str(selected_id)), None)
                 if task:
                     details_block(task)
@@ -597,22 +659,17 @@ def main():
             df_tasks, df_reqs, df_tools, df_subtasks = build_dataframes(data)
 
             with st.expander("Filters", expanded=True):
-                # Common
                 f_phase = st.multiselect("Phase", options=sorted([p for p in df_tasks["phase"].dropna().unique()]),
                                          default=[])
-                # Requirements filters
                 req_types_avail = sorted([x for x in df_reqs["req_type"].dropna().unique()]) if not df_reqs.empty else []
                 f_req_type = st.multiselect("Requirement Type", options=req_types_avail, default=[])
                 f_req_cite = st.text_input("Requirement Cite contains", "")
-                # Tool filters
                 tool_types_avail = sorted([x for x in df_tools["tool_type"].dropna().unique()]) if not df_tools.empty else []
                 f_tool_type = st.multiselect("Tool Type", options=tool_types_avail, default=[])
                 f_tool_name = st.text_input("Tool Name contains", "")
-                # Task text search
                 f_task_text = st.text_input("Task name/description contains", "")
 
-            # Filter functions
-            def apply_task_filters(df):
+            def apply_task_filters(df: pd.DataFrame) -> pd.DataFrame:
                 out = df.copy()
                 if f_phase:
                     out = out[out["phase"].isin(f_phase)]
@@ -630,7 +687,7 @@ def main():
                     out = out[out["tool_names"].str.contains(re.escape(f_tool_name), case=False, na=False)]
                 return out
 
-            def apply_req_filters(df):
+            def apply_req_filters(df: pd.DataFrame) -> pd.DataFrame:
                 out = df.copy()
                 if f_phase:
                     out = out[out["phase"].isin(f_phase)]
@@ -640,7 +697,7 @@ def main():
                     out = out[out["req_cite"].str.contains(re.escape(f_req_cite), case=False, na=False)]
                 return out
 
-            def apply_tool_filters(df):
+            def apply_tool_filters(df: pd.DataFrame) -> pd.DataFrame:
                 out = df.copy()
                 if f_phase:
                     out = out[out["phase"].isin(f_phase)]
