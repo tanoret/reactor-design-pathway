@@ -3,25 +3,7 @@
     "name": "U.S. NRC Reactor Licensing \u2014 Process Graph",
     "version": "1.0",
     "generated": "2025-11-24T19:01:16.596239Z",
-    "notes": "Full dataset for the interactive graph. Each task includes description, what-is-involved, must-accomplish, requirements, deliverables, acceptance, dependencies, tags, and subtasks (when applicable).",
-    "sources": [
-      {
-        "label": "mPower Licensing Plan",
-        "url": "/mnt/data/mPower_Licensing_Plan.docx"
-      },
-      {
-        "label": "mPower FSAR Engineering Plan",
-        "url": "/mnt/data/mPower_FSAR_Engineering_Plan.docx"
-      },
-      {
-        "label": "mPower Engineering Review (2025-11-07)",
-        "url": "/mnt/data/mPower_engineering_review_20251107.docx"
-      },
-      {
-        "label": "mPower FSAR WBS (xlsx)",
-        "url": "/mnt/data/mPower_fsar_wbs.xlsx"
-      }
-    ]
+    "notes": "Full dataset for the interactive graph. Each task includes description, what-is-involved, must-accomplish, requirements, deliverables, acceptance, dependencies, tags, and subtasks (when applicable)."
   },
   "tasks": [
     {
