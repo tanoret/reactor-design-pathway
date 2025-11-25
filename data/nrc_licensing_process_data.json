@@ -854,7 +854,7 @@
             "Document modeling guidelines (meshing, energy groups, cross-section processing) and limits of applicability."
           ],
           "tools": [
-            { "name": "MAMMOTH / Rattlesnake (MOOSE)", "type": "INL", "purpose": "Full-core multiphysics neutronics framework and transport solver." },
+            { "name": "Griffin (MOOSE)", "type": "INL", "purpose": "Full-core multiphysics neutronics framework and transport solver." },
             { "name": "OpenMC", "type": "standard", "purpose": "Monte Carlo reference solutions and XS generation/validation." },
             { "name": "PARCS / SIMULATE (where applicable)", "type": "commercial/standard", "purpose": "Deterministic core simulator and benchmarking." }
           ]
@@ -1617,7 +1617,7 @@
             "Generate power distributions/peaking factors and uncertainty; define rod insertion limits and sequence controls."
           ],
           "tools": [
-            { "name": "MAMMOTH / Rattlesnake (MOOSE)", "type": "INL", "purpose": "Full-core multiphysics neutronics (steady/state transient)." },
+            { "name": "Griffin (MOOSE)", "type": "INL", "purpose": "Full-core multiphysics neutronics (steady/state transient)." },
             { "name": "OpenMC", "type": "standard", "purpose": "High-fidelity neutronics benchmarks and XS validation." },
             { "name": "PARCS / SIMULATE (as applicable)", "type": "commercial/standard", "purpose": "Deterministic core simulator and licensing sets." }
           ]
@@ -3526,7 +3526,7 @@
           ],
           "tools": [
             { "name": "Core monitoring suite (vendor/plant)", "type": "commercial", "purpose": "On-line flux mapping and reactivity tracking." },
-            { "name": "MAMMOTH/Rattlesnake or PARCS/SIMULATE", "type": "INL/standard", "purpose": "Design predictions and acceptance bands for LPPT comparisons." }
+            { "name": "Griffin or PARCS/SIMULATE", "type": "INL/standard", "purpose": "Design predictions and acceptance bands for LPPT comparisons." }
           ]
         },
         {
@@ -3712,7 +3712,7 @@
           "tools": [
             { "name": "RELAP5-3D", "type": "INL", "purpose": "System thermal-hydraulics for AOOs/DBAs and boundary conditions." },
             { "name": "TRACE", "type": "standard", "purpose": "Confirmatory TH cases and selected sensitivity studies." },
-            { "name": "MAMMOTH/Rattlesnake (MOOSE)", "type": "INL", "purpose": "High-fidelity neutronics (steady-state/transient) where coupled modeling is needed." },
+            { "name": "Griffin (MOOSE)", "type": "INL", "purpose": "High-fidelity neutronics (steady-state/transient) where coupled modeling is needed." },
             { "name": "VIPRE / COBRA-EN/TF", "type": "commercial/standard", "purpose": "Subchannel DNBR/CPR evaluations and peaking confirmations." },
             { "name": "GitLab/GitHub + CI", "type": "commercial", "purpose": "Model deck/version control and automated regressions." }
           ]
@@ -3766,7 +3766,7 @@
           ],
           "tools": [
             { "name": "RELAP5-3D", "type": "INL", "purpose": "System response for ATWS sequences and mitigation timing." },
-            { "name": "MAMMOTH/Rattlesnake", "type": "INL", "purpose": "Reactivity feedbacks and worths under ATWS conditions." }
+            { "name": "Griffin", "type": "INL", "purpose": "Reactivity feedbacks and worths under ATWS conditions." }
           ]
         },
         {
@@ -6893,7 +6893,7 @@
             "Establish V&V and conditions of use; build benchmark set (separate-effects, integral, historical tests)."
           ],
           "tools": [
-            { "name": "MOOSE ecosystem (RELAP-7, BISON, Pronghorn, MAMMOTH)", "type": "INL", "purpose": "Coupled TH/neutronics/fuel performance (tech-specific apps)" },
+            { "name": "MOOSE ecosystem (RELAP-5, BISON, Pronghorn)", "type": "INL", "purpose": "Coupled TH/neutronics/fuel performance (tech-specific apps)" },
             { "name": "SAS4A/SASSYS-1 or SAM", "type": "DOE/industry", "purpose": "SFR/MSR/HTGR system response (as applicable)" },
             { "name": "OpenMC/Serpent", "type": "standard", "purpose": "Neutronics and cross-checks" }
           ]
@@ -6986,7 +6986,7 @@
       ],
       "computationalToolsSummary": [
         { "category": "Risk & LMP", "tools": ["SAPHIRE (INL)", "RiskSpectrum/CAFTA (commercial)"] },
-        { "category": "TH/Neutronics/Fuel", "tools": ["MOOSE (RELAP-7, BISON, Pronghorn, MAMMOTH) — INL", "SAM or SAS4A/SASSYS-1 (DOE/industry)", "OpenMC/Serpent (standard)"] },
+        { "category": "TH/Neutronics/Fuel", "tools": ["MOOSE (RELAP-5, BISON, Pronghorn) — INL", "SAM or SAS4A/SASSYS-1 (DOE/industry)", "OpenMC/Serpent (standard)"] },
         { "category": "MST & Consequences", "tools": ["RAVEN (INL)", "MELCOR/MAAP (tech-appropriate)", "Python (pandas)"] },
         { "category": "EP & Fire", "tools": ["RASCAL/MIDAS", "CFAST/FDS (commercial/standard)"] },
         { "category": "I&C & Setpoints", "tools": ["MATLAB/Modelica", "Excel+Python setpoint toolkit (RG 1.105)"] },
