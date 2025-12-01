@@ -1,5 +1,3 @@
-# NRC Licensing Process — Streamlit Graph Viewer (click sync fixed + readable graph)
-
 import json
 import os
 import re
@@ -490,7 +488,7 @@ def df_download_button(df: pd.DataFrame, label: str, filename: str):
 # App
 # -------------------------
 def main():
-    st.title("NRC Licensing Process — JSON Graph Viewer")
+    st.title("Reactor Design and Engineering Process")
     st.caption("Readable graph layout + reliable click-to-select (no locking).")
 
     # Sidebar: load
